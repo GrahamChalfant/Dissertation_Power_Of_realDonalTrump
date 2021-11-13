@@ -1,0 +1,180 @@
+---
+title: "keyword_analysis"
+author: "Graham Chalfant"
+date: "7/26/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidytext)
+library(tidyverse)
+library(qdap)
+library(stringr)
+library(wordcloud)
+library(SentimentAnalysis)
+library(lubridate)
+library(pracma)
+library(udpipe)
+library(Rcpp)
+
+```
+
+```{r}
+#read in csv
+tweets <- read_csv("all_trump_tweets.csv")
+
+#View(tweets)
+
+#cleaning guide https://towardsdatascience.com/text-mining-with-r-gathering-and-cleaning-data-8f8b0d65e67c
+
+#clean data by remoivng twitter specific text
+clean_tweets <- tweets
+
+clean_tweets$text <- tolower(clean_tweets$text)
+# Remove mentions, urls, emojis, numbers, punctuations, etc.
+clean_tweets$text <- gsub("@\\w+", "", clean_tweets$text)
+clean_tweets$text <- gsub("https?://.+", "", clean_tweets$text)
+clean_tweets$text <- gsub("\\d+\\w*\\d*", "", clean_tweets$text)
+clean_tweets$text <- gsub("#\\w+", "", clean_tweets$text)
+clean_tweets$text <- gsub("[^\x01-\x7F]", "", clean_tweets$text)
+clean_tweets$text <- gsub("[[:punct:]]", " ", clean_tweets$text)
+# Remove spaces and newlines
+clean_tweets$text <- gsub("\n", " ", clean_tweets$text)
+clean_tweets$text <- gsub("^\\s+", "", clean_tweets$text)
+clean_tweets$text <- gsub("\\s+$", "", clean_tweets$text)
+clean_tweets$text <- gsub("[ |\t]+", " ", clean_tweets$text)
+
+#View(clean_tweets)
+
+clean_tweets <- clean_tweets[!grepl("^rt", clean_tweets$text),]
+
+```
+
+Filtering for tweets only during his presidency 
+Inaguration: January 20, 2017 - January 20 2021 
+```{r}
+clean_tweets <- clean_tweets %>% filter(date >= as.Date("2017-01-20") & date <= as.Date("2021-01-20"))
+
+summary(clean_tweets)
+
+```
+
+
+
+Annotate twets 
+```{r}
+#Definitely need to learn more about this
+
+#download and load the pre-trained models
+#udmodel <- udpipe_download_model(language = "english")
+#udmodel <- udpipe_load_model(file = udmodel$file_model)
+
+#annotate the data frame with udpipe model
+#annotated_tweets <- udpipe_annotate(udmodel, x = clean_tweets$text)
+#annotated_tweets <- as.data.frame(annotated_tweets)
+
+```
+
+```{r}
+#saveRDS(annotated_tweets, file = "annotated_tweets.rds")
+annotated_tweets <- readRDS(file = "annotated_tweets.rds")
+```
+
+#Stop words -- NEED TO REMOVE BEFORE CREATING THE MODEL 
+```{r}
+#Could just ignore the common ones like "new york" and continue 
+
+custom_stop_words2 <- tribble(
+	~word,      ~lexicon,
+	"rt", "CUSTOM",
+	"íí","CUSTOM",
+	"get","CUSTOM",
+	"like","CUSTOM",
+	"just","CUSTOM",
+	"yes","CUSTOM",
+	"know","CUSTOM",
+	"will","CUSTOM",
+	"good","CUSTOM",
+	"day","CUSTOM",
+	"people","CUSTOM",
+	"amp", "CUSTOM" #this needs to be noted
+)
+
+stop_words3 <- stop_words %>%
+bind_rows(custom_stop_words2)
+
+#clean_tweets <- clean_tweets %>% anti_join(stop_words3$word, by = "token")
+
+#need to figure out how to remove the stop words for the analysis below 
+# https://towardsdatascience.com/analyzing-whentrumpisoutofoffice-tweets-7169b3e5ca35
+
+
+```
+
+
+
+```{r}
+#https://towardsdatascience.com/analyzing-whentrumpisoutofoffice-tweets-7169b3e5ca35
+
+stats <- keywords_rake(x = annotated_tweets, term = "lemma", group = "doc_id", 
+                       relevant = annotated_tweets$upos %in% c("NOUN", "ADJ"))
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+
+stats %>%
+  #filter data
+  filter(freq > 75 & ngram > 1) %>%
+  ggplot(aes(x = reorder(keyword, rake), y =  rake)) +
+  geom_col(fill = "firebrick2") +
+  coord_flip() +
+  geom_text(aes(label = round(rake, digits = 2), vjust = 0, hjust = -0.3 )) +
+  xlab("Keywords")+
+  ylab("Rake score")+
+  ggtitle("Keywords identified by RAKE method") +
+  theme(legend.position = "none")
+```
+
+#POS (parts of speech tagging)
+```{R}
+annotated_tweets$phrase_tag <- as_phrasemachine(annotated_tweets$upos, type = "upos")
+stats2 <- keywords_phrases(x = annotated_tweets$phrase_tag, term = tolower(annotated_tweets$token), 
+                          pattern =  "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+
+stats2 <- subset(stats2, ngram > 1 & freq > 125)
+stats2$key <- factor(stats2$keyword, levels = rev(stats2$keyword))
+stats2 %>%
+  ggplot(aes(x = reorder(keyword, freq), y =  freq)) +
+  geom_col(fill = "steelblue3") +
+  coord_flip() +
+  geom_text(aes(label = freq, vjust = 0, hjust = -0.3 )) +
+  xlab("Keywords")+
+  ylab("Frequency")+
+  ggtitle("Keywords Identified by POS Tags - Simple Noun Phrases") +
+  theme_classic()+
+  theme(legend.position = "none")
+
+ggsave("Keywords Identified by POS Tags - Simple Noun Phrases.png")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,1006 @@
+---
+title: "trumps_tweets"
+author: "Graham Chalfant"
+date: "6/25/2021"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidytext)
+library(tidyverse)
+library(qdap)
+library(stringr)
+library(wordcloud)
+library(SentimentAnalysis)
+library(lubridate)
+library(pracma)
+library(udpipe)
+library(Rcpp)
+library(rtweet)
+library(ggpubr)
+library(tidyquant)
+library(readxl)
+library(data.table)
+```
+
+# Data Preparation
+
+## Reading in Data and Cleaning
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#read in csv
+tweets <- read_csv("all_trump_tweets.csv")
+
+#clean data by remoivng twitter specific text
+clean_tweets <- tweets
+
+clean_tweets$text <- tolower(clean_tweets$text)
+# Remove mentions, urls, emojis, numbers, punctuations, etc.
+clean_tweets$text <- gsub("@\\w+", "", clean_tweets$text)
+clean_tweets$text <- gsub("https?://.+", "", clean_tweets$text)
+clean_tweets$text <- gsub("\\d+\\w*\\d*", "", clean_tweets$text)
+clean_tweets$text <- gsub("#\\w+", "", clean_tweets$text)
+clean_tweets$text <- gsub("[^\x01-\x7F]", "", clean_tweets$text)
+clean_tweets$text <- gsub("[[:punct:]]", " ", clean_tweets$text)
+clean_tweets$text <- gsub("amp", " ", clean_tweets$text)
+# Remove spaces and newlines
+clean_tweets$text <- gsub("\n", " ", clean_tweets$text)
+clean_tweets$text <- gsub("^\\s+", "", clean_tweets$text)
+clean_tweets$text <- gsub("\\s+$", "", clean_tweets$text)
+clean_tweets$text <- gsub("[ |\t]+", " ", clean_tweets$text)
+
+#Removing retweets
+clean_tweets <- clean_tweets[!grepl("^rt", clean_tweets$text),]
+
+#Checking for NA and structure errors
+
+summary(clean_tweets)
+str(clean_tweets)
+
+```
+
+## Filtering for Tweets During Trump's Term
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+clean_tweets$date <- as.Date(clean_tweets$date)
+
+clean_tweets <- clean_tweets %>% filter(date >= as.Date("2017-01-23") & date <= as.Date("2021-01-20"))
+
+```
+
+## Tokenizing Tweets and Removing Stopwords
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Unesting Tokens
+tidy_tweets <- clean_tweets %>% mutate(linenumber = row_number()) %>%  unnest_tokens(word, text) 
+
+#Creating custom stopwords
+custom_stop_words <- tribble(
+	~word,      ~lexicon,
+	"íí","CUSTOM",
+	"get","CUSTOM",
+	"like","CUSTOM",
+	"just","CUSTOM",
+	"yes","CUSTOM",
+	"know","CUSTOM",
+	"will","CUSTOM",
+	"good","CUSTOM",
+	"day","CUSTOM",
+	"people","CUSTOM",
+	"amp", "CUSTOM",
+	"dont", "CUSTOM",
+	"trump", "CUSTOM",
+	"president", "CUSTOM"
+	
+)
+
+#Adding custom stopwords 
+stop_words2 <- stop_words %>%
+bind_rows(custom_stop_words)
+
+#Anit-joining tokenized tweets with stopwords
+tidy_tweets <- tidy_tweets %>% anti_join(stop_words2)
+
+```
+
+# Data Discovery
+
+## Visualizing Trump's Twitter Usage
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+tweet_plot <- clean_tweets %>% select(date) %>% group_by(date) %>% summarize(freq = n()) %>% arrange(date)
+
+ggplot(tweet_plot, aes(x = date, y = freq)) + 
+  geom_line(color = "steelblue3")+ 
+  geom_smooth(color = "firebrick1", se = FALSE)+ 
+  labs(title = "Trump Tweet Frequency During Term", x = "Time", y = "Number of Tweets") + 
+  theme_classic() +
+  theme(legend.position = "none")
+
+#ggsave("Trump Tweet Frequency During Term.png")
+
+```
+
+## Plotting Trump's Most Frequently Used Words
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Arranging trumps most frequently used words in descending order
+word_count <- tidy_tweets %>% count(word) %>% mutate(id = row_number()) %>% arrange(desc(n)) %>% mutate(word2 = fct_reorder(word, n)) %>% anti_join(stop_words2)
+
+#Sorting for top 20 most frequent words
+top_20 <- word_count[1:20,]
+
+ggplot(top_20, aes(x = word2, y = n)) +
+  geom_bar(fill = "steelblue3", stat = "identity") +
+  coord_flip() +
+  theme_classic()+
+  ggtitle("Trump's Most Frequently Tweeted Words")+
+  guides(fill = FALSE) + 
+  xlab("") +
+  ylab("Frequency")+
+  theme(legend.position = "none")
+  
+#ggsave("Trump's Most Frequently Tweeted Words.png")
+
+```
+
+## Plotting Trumps Word Frequency by Year
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Arranging words by year 
+word_count_year <- tidy_tweets %>% mutate(year = year(date)) %>% select(year, word)%>%  group_by(word, year) %>%  summarize(freq = n()) %>%  arrange(desc(freq))
+
+#Assigning words by year to their own variable
+first_word_count <- word_count_year %>% filter(year == 2017) %>% arrange(desc(freq)) %>% head(10)
+second_word_count <- word_count_year %>% filter(year == 2018) %>% arrange(desc(freq)) %>% head(10)
+third_word_count <- word_count_year %>% filter(year == 2019) %>% arrange(desc(freq)) %>% head(10)
+fourth_word_count <- word_count_year %>% filter(year == 2020) %>% arrange(desc(freq)) %>% head(10)
+fifth_word_count <- word_count_year %>% filter(year == 2021) %>% arrange(desc(freq)) %>% head(10)
+
+#Plotting each years most frequently used words seperately 
+a <- ggplot(first_word_count, aes(x = reorder(word, freq), y = freq, fill = word)) +
+  geom_bar(stat = "identity", fill = "steelblue3") +
+  coord_flip() +
+  theme_classic()+
+  guides(fill = FALSE) + 
+  ylab("") +
+  xlab("")+
+  theme(axis.text.x = element_blank())
+
+b <- ggplot(second_word_count, aes(x = reorder(word, freq), y = freq, fill = word)) +
+  geom_bar(stat = "identity", fill = "steelblue3") +
+  coord_flip() +
+  theme_classic()+
+  guides(fill = FALSE) + 
+  ylab("") +
+  xlab("")+
+  theme(axis.text.x = element_blank())
+
+c <- ggplot(third_word_count, aes(x = reorder(word, freq), y = freq, fill = word)) +
+  geom_bar(stat = "identity", fill = "steelblue3") +
+  coord_flip() +
+  theme_classic()+
+  guides(fill = FALSE) + 
+  ylab("") +
+  xlab("")+
+  theme(axis.text.x = element_blank())
+
+d <- ggplot(fourth_word_count, aes(x = reorder(word, freq), y = freq, fill = word)) +
+  geom_bar(stat = "identity", fill = "steelblue3") +
+  coord_flip() +
+  theme_classic()+
+  guides(fill = FALSE) + 
+  ylab("") +
+  xlab("")+
+  theme(axis.text.x = element_blank())
+
+e <- ggplot(fifth_word_count, aes(x = reorder(word, freq), y = freq, fill = word)) +
+  geom_bar(stat = "identity", fill = "steelblue3") +
+  coord_flip() +
+  theme_classic()+
+  guides(fill = FALSE) + 
+  ylab("")+
+  xlab("")+
+  theme(axis.text.x = element_blank())
+
+#Combining all plots into one
+figure <- ggarrange(a, b, c, d, e + 
+                      rremove("x.text"), 
+                    title = "Most Frequent Words Per Year", 
+                    labels = c("2017", "2018", "2019", "2020", "2021"), 
+                    ncol = 3, nrow = 2)
+
+annotate_figure(figure, 
+                top = text_grob("Tweet Word Frequency by Year", face = "bold", size = 13))
+
+#ggsave("Tweet Word Frequency by Year.png")
+```
+
+## Wordcloud of Trump's Most Frequently Used Words
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+set.seed(111)
+pal = brewer.pal(9,"Blues")
+word_count %>% with(wordcloud(word2, n, random.order = FALSE, random.color = FALSE, max.words = 25, colors = pal, scale = c(4, .5)))
+```
+
+## Preparing Data To Visualize Using the 'Bing' Dictionary
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Creating Custom Stopwords
+custom_bing_stop_words <- tribble(
+	~word,      ~lexicon,
+	"íí","CUSTOM",
+	"get","CUSTOM",
+	"like","CUSTOM",
+	"just","CUSTOM",
+	"yes","CUSTOM",
+	"know","CUSTOM",
+	"will","CUSTOM",
+	"good","CUSTOM",
+	"day","CUSTOM",
+	"people","CUSTOM",
+	"amp", "CUSTOM",	
+	"dont", "CUSTOM",
+	"trump", "CUSTOM" #Added "trump" because the bing library treats it as a positive word
+	
+)
+
+#Adding custom stop words to stopwords 
+stop_words_bing <- stop_words %>%
+bind_rows(custom_bing_stop_words)
+
+
+#Joining Trump's tokens with 'Bing' dictionary
+trump_tweet_bing <- tidy_tweets %>% 
+  anti_join(custom_bing_stop_words) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(word, sentiment, sort = TRUE) %>% 
+  ungroup()
+
+```
+
+## Plotting Trump's most Frequently Used Positive and Negative Words Using 'Bing' Tokens
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Creating colors for chart
+my_colors <- c("firebrick2", "steelblue3")
+
+#Plotting trumps most frequently used positive and negative words
+trump_tweet_bing %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 15) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment", y = NULL, title = "Trump's Most Frequently Used Positive and Negative Words") + 
+  theme_classic()+
+  scale_fill_manual(values= my_colors)
+
+#ggsave("Trump's Most Frequently Used Positive and Negative Words.png")
+```
+
+## Creating Wordcloud with 'Bing' Tokens
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Creating word cloud
+set.seed(123)
+
+tidy_tweets %>% 
+  anti_join(stop_words_bing) %>% 
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  reshape2::acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("firebrick2", "steelblue3"),
+                   max.words = 100)
+```
+
+## Sum of Trump's Twitter Sentiment Per Day
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+
+tidy_tweets %>% 
+  inner_join(get_sentiments("afinn")) %>% 
+  group_by(date) %>% 
+  summarize(avg_sent = sum(value)) %>% 
+  ggplot(aes(x = date, y = avg_sent))+ 
+  geom_line(color = "steelblue3", linetype = "solid")+
+  labs(title = "Sum of Trump's Twitter Sentiment by Day", x = "Time", y = "Average Sentiment")+
+  theme_classic()
+
+#ggsave("Sum of Trump's Twitter Sentiment by Day.png")
+```
+
+# Trump's Approval Rating Data
+
+## Reading in Trump's Approval Rating Data
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Reading in the approval rating data
+app_rate_data <- read_excel("approval_topline_five_thirty_eight_USE_THIS_ONE_cross_checked.xlsx")
+```
+
+### Filtering for Voter Type and Extracting Relevant Columns
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Filtering for the relevant columns 
+app_data <- app_rate_data %>% select(subgroup, modeldate, approve_estimate) %>% filter(subgroup == "All polls") %>% rename(date = modeldate) %>% arrange(date)
+
+#Plotting Trump's Approval Ratings
+ggplot(app_data, aes(x = date, y = approve_estimate)) + 
+  geom_line(color = "steelblue3") + 
+  labs(title = "Trump Approval Rating (All polls)", x = "Time", y = "Approval Rating (%)") +
+  theme_classic()
+
+#ggsave("Trump Approval Rating.png")
+```
+
+## Data Prep for Approval Ratings with Major Events
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Variable containing dates and associated names of major events
+major_events <- data.frame("date" = as.Date(c("2017-06-01", "2017-08-15", "2018-03-01", "2019-10-26", "2019-12-18", "2020-03-13", "2020-07-06", "2020-11-07", "2021-01-06", "2021-01-13", "2019-01-25")), "Name" = c("Paris Agreement", "Charlottesville", "China Trade War Begins", "ISIS chief Baghdadi Killed", "Impeachment", "COVID national emergency", "WHO withdrawl", "Loses re-election", "Capitol riot", "Second impeachment", "Border wall battle"))
+
+#Converting event dates to 'date' format
+app_data$date <- as.Date(app_data$date)
+#Joining approval ratings data with major events data
+app_with_points <- full_join(app_data, major_events, by = "date")
+#Created new variable to add dates to special event rows 
+app_with_points <- app_with_points %>% mutate(point_date = ifelse(is.na(Name), NA, as.Date(date)))
+#Converted date to 'date' format
+app_with_points$point_date <- as.Date(app_with_points$point_date)
+
+```
+
+## Plotting Major Events
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Library for adding labels to graphs 
+library(ggrepel)
+
+#ggplot for major events
+ggplot(app_with_points, aes(x = date, y = approve_estimate)) + 
+  geom_line(color = "steelblue3") + 
+  geom_point(aes(x = point_date, y = approve_estimate, color = "red"))+
+  geom_label_repel(aes(label = Name), 
+                   box.padding = 0.35,
+                   point.padding = .5, 
+                   max.overlaps = Inf,
+                   direction = "both",
+                   nudge_y = 2,
+                   segment.size = .5, 
+                   ylim = c(-Inf, Inf),
+                   segment.color = "firebrick2") + 
+  labs(y = "Approval Estimate (%)", x = "Time", title = "Trump's Approval Rating with Major Events")+
+  theme_classic()+
+  theme(legend.position = "None") 
+
+#ggsave("Trump's Approval Rating with Major Events.png")
+
+```
+
+## Computing average sentiment time series
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Joining twitter tokens with 'afinn' dictionary
+tidy_tweets <- tidy_tweets %>% 
+  inner_join(get_sentiments("afinn"))
+#Computin mean sentiment per day
+avg_sentiment_by_day <- tidy_tweets %>% group_by(date) %>% summarize(avg_sent = mean(value))
+
+
+#Average sentiment per day plotted 
+ggplot(avg_sentiment_by_day, aes(x = date, y = avg_sent)) + 
+  geom_line(color = "steelblue3")  + 
+  labs(title = "Average Twitter Sentiment Per Day", x = "Time", y = "Average Sentiment") + 
+  theme_classic()+
+  theme(legend.position = "none")
+
+#ggsave("average twitter sentiment per day.png")
+
+```
+
+## Distribution of Trumps Twitter Sentimetn using the AFFIN dictionary
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+tidy_tweets
+ggplot(tidy_tweets, aes(x = value)) +
+  geom_bar(fill = "steelblue3")+
+  theme_classic()+
+  labs(title = "Trump's Word Frequency Using AFINN Dictionary", y = "Frequency", x = "AFINN Sentiment Value")+
+  scale_x_continuous(breaks = seq(-4, 5, by = 1))
+
+ggsave("WordFrequencyUSingAFINNDictionary.png")
+
+```
+
+## Creating MA(5) of Average Daily Sentiment and Plotting with Approval Ratings
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Calculating 5 day moving average of Twitter sentiment 
+avg_sentiment_by_day <-  avg_sentiment_by_day %>% mutate(avg_sent_ma_05 = zoo::rollmean(avg_sent, k = 5, fill = NA))
+
+#Joining approval ratings with avg_sentiment 
+app_and_sent <- inner_join(avg_sentiment_by_day, app_data)
+
+
+#Subtracting 35 from approval rating in order to have sentiment and approval near eachother 
+app_and_sent$approve_estimate_lower <- app_and_sent$approve_estimate - 41
+
+app_and_sent %>% select(date, avg_sent, approve_estimate_lower) %>% 
+  ggplot(aes(x = date))+
+  geom_line(aes(y = approve_estimate_lower, color = "firebrick2"))+
+  geom_ma(aes(y = avg_sent), ma_fun = SMA, n = 5, color = "steelblue3", linetype = "solid") +
+  labs(title = "MA(5) of Daily Sentiment and Approval Ratings", x = "Time", y = "Average Sentiment")+
+  theme_classic()+
+  theme(legend.position = "none")
+
+#ggsave("five_day_moving_average_plot.png")
+```
+
+## Scatter Plot of approval ratings and average daily sentiment
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+app_and_sent
+
+ggplot(app_and_sent, aes(x = avg_sent, y = approve_estimate)) + 
+  geom_point(color = "steelblue3") + 
+  geom_smooth(method = "lm", color = "firebrick2", se = FALSE) + 
+  labs(title = "Scatter Plot of Average Daily Sentiment and Daily Approval Ratings", x = "Average Daily Sentiment", y = "Daily Approval Ratings")+
+  theme_classic()
+
+#ggsave("Scatterplot_Daily_Sentiment_and_Approval_Ratings.png")
+```
+
+## Testing Stationary of Approval Ratings and Average Sentiment
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+library(tseries)
+
+#Stationarity test of average sentiment
+adf.test(avg_sentiment_by_day$avg_sent, k = 0)
+
+#Stationarity test of approval ratings
+adf.test(app_data$approve_estimate, k = 0)
+```
+
+## ACF Plots of Approval Ratings and Average Sentiment
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Autocorrelation plots of approval ratings
+acf(app_data$approve_estimate, plot = TRUE) #Clear trend
+#Autocorrelation plots of average sentiment
+acf(avg_sentiment_by_day$avg_sent, plot = TRUE)
+
+```
+
+## First Order Differencing of Approval Rating Data
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Converting appa and sent to a DT for differencing 
+app_and_sentDT <- data.table(app_and_sent)
+
+#Differencing approval estimate 
+app_and_sentDT[, approval_diff_1 := approve_estimate - shift(approve_estimate, type = "lag", n = 1)]
+
+#Data is now stationary 
+adf.test(app_and_sentDT$approve_estimate, k = 0)
+
+#plotting the differenced approval ratings 
+ggplot(app_and_sentDT, aes(x = date, y = approval_diff_1)) + 
+  geom_line(color = "steelblue3")+
+  labs(title = "Differenced Approval Ratings", y = "Approval Ratings", x = "Time")+
+  theme_classic()
+
+#ggsave("differenced_approval_ratings.png")
+```
+
+# Modeling
+
+## Model 1 - All Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Regression model containing all tweets
+model.1 <- lm(approval_diff_1~avg_sent, data = app_and_sentDT)
+#model 1 output
+summary(model.1)
+
+#Residual Plots
+par(mfrow = c(2, 2))  # Create plotting columns
+plot(model.1)  # Plot the model information
+
+#Scatter plot of model 1
+ggplot(app_and_sentDT, aes(x = avg_sent, y = approve_estimate)) + 
+  geom_point(color = "steelblue3")+
+  geom_smooth(method = "lm", se = FALSE, color = "firebrick2") + 
+  labs(title = "Scatter Plot of Trump's Twitter Sentiment and Approval Ratings", x = "Average Twitter Sentiment", y = "Average Approval Ratings")+
+  theme_classic()
+
+#ggsave("Scatter Plot of Trump's Twitter Sentiment and Approval Ratings.png")
+```
+
+## Model 1 Cooks Distance
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Calculating cooks distance
+cooks_distance <- cooks.distance(model.1)
+
+#Plotting Cooks Distance
+plot(cooks_distance, main = "Influential Observations Identified by Cooks Distance")
+#Creating horizontal line for values greater than 3 times the mean 
+abline(h = 3*mean(cooks_distance), lty = 1, col = "steelblue3", lwd = 2)
+#Labeling values which are greater than 10 times the mean 
+text(x=1:length(cooks_distance)+1, y=cooks_distance, labels=ifelse(cooks_distance>10*mean(cooks_distance), names(cooks_distance),""), col="firebrick2")
+```
+
+## Removing Outliers Found by Cooks Distance
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+cooksD <- cooks.distance(model.1)
+influential <- cooksD[(cooksD > (3 * mean(cooksD, na.rm = TRUE)))]#Sorting observations with Cook's distance greater than 3 times the mean
+
+#Turning back to dataframe so I can sort for outliers and keep the differenced data
+app_and_sent_outliers <- as.data.frame(app_and_sentDT)
+
+#Identifying row index for outliers 
+names_of_influential <- names(influential)
+outliers <- app_and_sent_outliers[names_of_influential, ]
+
+#Anti-joining to remove outliers 
+app_and_sent_outliers <- anti_join(app_and_sent_outliers, outliers)
+
+#ACF of data wihtout outliers
+acf(na.omit(app_and_sent_outliers$approval_diff_1), plot = TRUE)
+
+```
+
+## Model 2 - Regression Model Without Outliers
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#New model without outliers 
+model.2 <- lm(approval_diff_1~avg_sent, data = app_and_sent_outliers)
+summary(model.2)
+
+par(mfrow = c(2, 2))  # Split the plotting panel into a 2 x 2 grid
+plot(model.2) 
+
+
+
+```
+
+## Differenced Approval Ratings With and Without Outliers
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Using grid arrange to combine plots
+approval_with_and_without_outliers <- gridExtra::grid.arrange(
+
+#plotting the differenced approval ratings 
+ggplot(app_and_sentDT, aes(x = date, y = approval_diff_1)) + 
+  geom_line(color = "steelblue3")+labs(title = "Differenced Approval Ratings", y = "Approval Ratings", x = "Time")+
+  theme_classic(),
+
+
+#Approval ratings without outliers 
+ggplot(app_and_sent_outliers, aes(x = date, y = approval_diff_1)) + 
+  geom_line(color = "steelblue3")+labs(title = "Differenced Approval Ratings Without Outliers", y = "Approval Ratings", x = "Time")+
+  theme_classic()
+)
+
+#ggsave("approval_ratings_with_and_without_outliers.png", approval_with_and_without_outliers)
+
+```
+
+------------------------------------------------------------------------
+
+# Segmenting tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Segmenting tweets based on news keywords
+news_tweets <- clean_tweets[grep("fake.*news|fake.*media|cnn|fake|news", clean_tweets$text, value=FALSE, ignore.case = TRUE), ] #Time trump tweets about fake news 
+
+#Segmenting tweets based on democratic keywords
+left_tweets <- clean_tweets[grep("democrats|joe|biden|hillary|left|sleepy joe", clean_tweets$text, value=FALSE, ignore.case = TRUE), ]
+
+#Segmenting tweets based on Border keywords
+Border_tweets <- clean_tweets[grep("immigration|immigrant|Border.*wall|wall.*Border|southern.*Border|illegal.*immigrants|Border.*security|mexican[s]|mexico", clean_tweets$text, value=FALSE, ignore.case = TRUE), ]
+```
+
+## Visualizing Border Tweets Per Year
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Creating column to group tweets by year
+Border_tweets_year <- Border_tweets %>% mutate("Year" = ifelse(date <= "2017-12-31", "2017",
+                                                                 ifelse(date <= "2018-12-31", "2018",
+                                                                        ifelse(date <= "2019-12-31", "2019", "2020-2021"))))
+
+#Plotting Border tweet frequncy by year
+board_plot <- Border_tweets_year %>% count(Year) 
+  ggplot(board_plot, aes(x = Year, y = n)) + 
+  geom_bar(stat = "identity", fill = "steelblue3")+
+  labs(title = "Border Tweet Frequency by Year", y = "Frequency")+
+  theme_classic()+
+  theme(legend.position = "none")
+  
+#ggsave("Border_tweet_frequency_by_year.png")
+```
+
+------------------------------------------------------------------------
+
+# News tweets
+
+## Tokenizing News Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Unest tokens 
+tidy_news_tweets <- news_tweets %>% mutate(linenumber = row_number()) %>%  unnest_tokens(word, text) 
+
+#Creating custom stop words
+custom_stop_words <- tribble(
+	~word,      ~lexicon,
+	"íí","CUSTOM",
+	"get","CUSTOM",
+	"like","CUSTOM",
+	"just","CUSTOM",
+	"yes","CUSTOM",
+	"know","CUSTOM",
+	"will","CUSTOM",
+	"good","CUSTOM",
+	"day","CUSTOM",
+	"people","CUSTOM",
+	"amp", "CUSTOM",
+	"dont", "CUSTOM",
+	"trump", "CUSTOM",
+	"president", "CUSTOM"
+	
+)
+#Combining custom stop words with predifined stopwords
+stop_words2 <- stop_words %>%
+bind_rows(custom_stop_words)
+
+#Anti-joining news tweets with stop words
+tidy_news_tweets <- tidy_news_tweets %>% anti_join(stop_words2)
+
+```
+
+## Calculating Average News Tweet Sentiment
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Joining news tweet tokens with 'afinn' dictionary
+tidy_news_tweets <- tidy_news_tweets %>% 
+  inner_join(get_sentiments("afinn"))
+
+#Calculating averae daily sentiment 
+avg_news_sentiment_by_day <- tidy_news_tweets %>% group_by(date) %>% summarize(news_avg_sent = mean(value))
+
+#Average sentiment per day plotted 
+ggplot(avg_news_sentiment_by_day, aes(x = date, y = news_avg_sent)) + 
+  geom_line(color = "steelblue3")+ 
+  labs(title = "Average News Tweet Sentiment Per Day", x = "Time", y = "Average Sentiment") + 
+  theme_classic()+
+  theme(legend.position = "none")
+#ggsave("average news tweet sentiment.png")
+```
+
+## Creating MA(5) of News Tweet Sentiment
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Creating 5 day moving average data from sentimetn data
+avg_news_sentiment_by_day <-  avg_news_sentiment_by_day %>% mutate(avg_news_sent_ma_05 = zoo::rollmean(news_avg_sent, k = 5, fill = NA))
+
+app_and_sentDT_news <- inner_join(app_and_sentDT, avg_news_sentiment_by_day)
+
+```
+
+## Regression Model with News Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Regression Model 
+model_news <- lm(approval_diff_1 ~ news_avg_sent, app_and_sentDT_news)
+summary(model_news)
+
+#Scatter Plot of Regression Model 
+ggplot(app_and_sentDT_news, aes(x = approve_estimate, y = news_avg_sent)) + 
+  geom_point(color = "steelblue3") + 
+  geom_smooth(method = "lm", se = FALSE, color = "firebrick1")+
+  labs(x = "Approval Ratings", y = "Average Sentiment", title = "Scatter Plot of Approval Ratings and Average News Sentiment")+
+  theme_classic()
+
+#ggsave("scatterplot_approval_ratings_and_average_news_sentiment.png")
+
+#Plotting model residuals 
+par(mfrow = c(2, 2))  # Split the plotting panel into a 2 x 2 grid
+plot(model_news)
+```
+
+------------------------------------------------------------------------
+
+# Democrat tweets
+
+## Tokenizing Segmented Democratic Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Unest tokens 
+tidy_left_tweets <- left_tweets %>% mutate(linenumber = row_number()) %>%  unnest_tokens(word, text) 
+
+#Creating custom stop words
+custom_stop_words <- tribble(
+	~word,      ~lexicon,
+	"íí","CUSTOM",
+	"get","CUSTOM",
+	"like","CUSTOM",
+	"just","CUSTOM",
+	"yes","CUSTOM",
+	"know","CUSTOM",
+	"will","CUSTOM",
+	"good","CUSTOM",
+	"day","CUSTOM",
+	"people","CUSTOM",
+	"amp", "CUSTOM",
+	"dont", "CUSTOM",
+	"trump", "CUSTOM",
+	"president", "CUSTOM"
+	
+)
+#Combining custom stopwords with predefined stopwords
+stop_words2 <- stop_words %>%
+bind_rows(custom_stop_words)
+
+#Removing stopwords from democratic tweets
+tidy_left_tweets <- tidy_left_tweets %>% anti_join(stop_words2)
+```
+
+## Calculating Average Sentiment of Democratic Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Joining democratic tokens with 'afinn' dictionary 
+tidy_left_tweets <- tidy_left_tweets %>% 
+  inner_join(get_sentiments("afinn"))
+
+#Groupoing tokens by date and summing sentiment 
+avg_left_sentiment_by_day <- tidy_left_tweets %>% group_by(date) %>% summarize(left_avg_sent = mean(value))
+
+#Average sentiment per day plotted 
+ggplot(avg_left_sentiment_by_day, aes(x = date, y = left_avg_sent)) + 
+  geom_line(color = "steelblue3")  + 
+  labs(title = "Average Democratic Tweet Sentiment Per Day", x = "Time", y = "Average Sentiment") + 
+  theme_classic() +
+  theme(legend.position = "none")
+
+#ggsave("Average Democratic Tweet Sentiment Per Day.png")
+```
+
+## Creating MA(5) of Democratic Tweet Average Daily Sentiment
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Creating 5 day moving average data from sentimetn data
+avg_left_sentiment_by_day <-  avg_left_sentiment_by_day %>% mutate(avg_left_sent_ma_05 = zoo::rollmean(left_avg_sent, k = 5, fill = NA))
+
+#Joining democratic moving average with main DF
+app_and_sentDT_left <- inner_join(app_and_sentDT, avg_left_sentiment_by_day)
+```
+
+## Regression Model with Democratic Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Regression Model
+model_left <- lm(approval_diff_1 ~ left_avg_sent, app_and_sentDT_left)
+summary(model_left)
+
+#Scatterplot of LM 
+ggplot(app_and_sentDT_left, aes(x = approve_estimate, y = left_avg_sent)) + 
+  geom_point(color = "steelblue3") + 
+  geom_smooth(method = "lm", se = FALSE, color = "firebrick1")+
+  labs(title ="Scatter Plot of Approval Ratings and Average Democratic Tweet Sentiment", x = "Approval Rating", y = "Average Sentiment")+
+  theme_classic()
+
+#ggsave("Scatter Plot of Approval Ratings and Average Democratic Tweet Sentiment.png")
+
+#Plotting Model residuals 
+par(mfrow = c(2, 2))  # Split the plotting panel into a 2 x 2 grid
+plot(model_left)
+```
+
+------------------------------------------------------------------------
+
+# Border tweets
+
+## Tokenizing Segmented Border Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Unest tokens 
+tidy_Border_tweets <- Border_tweets %>% mutate(linenumber = row_number()) %>%  unnest_tokens(word, text) 
+
+#Creating custom stop words
+custom_stop_words <- tribble(
+	~word,      ~lexicon,
+	"íí","CUSTOM",
+	"get","CUSTOM",
+	"like","CUSTOM",
+	"just","CUSTOM",
+	"yes","CUSTOM",
+	"know","CUSTOM",
+	"will","CUSTOM",
+	"good","CUSTOM",
+	"day","CUSTOM",
+	"people","CUSTOM",
+	"amp", "CUSTOM",
+	"dont", "CUSTOM",
+	"trump", "CUSTOM",
+	"president", "CUSTOM"
+	
+)
+#Joining custom stopwords with predefined stopwords
+stop_words2 <- stop_words %>%
+bind_rows(custom_stop_words)
+
+#Removing stopwords from Border tweet tokens
+tidy_Border_tweets <- tidy_Border_tweets %>% anti_join(stop_words2)
+```
+
+## Finding average sentiment for Border tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Joining Border tweet tokens with 'afinn' dictionary
+tidy_Border_tweets <- tidy_Border_tweets %>% 
+  inner_join(get_sentiments("afinn"))
+
+#Grouping sentiment by date and summing
+avg_Border_sentiment_by_day <- tidy_Border_tweets %>% group_by(date) %>% summarize(Border_avg_sent = mean(value))
+
+
+#Average sentiment per day plotted 
+ggplot(avg_Border_sentiment_by_day, aes(x = date, y = Border_avg_sent, color = "red")) + 
+  geom_line(color = "steelblue3")  + 
+  labs(title = "Average Border Sentiment Per Day", x = "Time", y = "Average Sentiment") + 
+  theme_classic()+
+  theme(legend.position = "none")
+
+#ggsave("average Border sentiment tweets.png")
+```
+
+## Creating MA(5) of Border Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Creating 5 day moving average data from sentimetn data
+avg_Border_sentiment_by_day <-  avg_Border_sentiment_by_day %>% mutate(avg_Border_sent_ma_05 = zoo::rollmean(Border_avg_sent, k = 5, fill = NA))
+#Joining Border tweet moving average with main DF
+app_and_sentDT_Border <- inner_join(app_and_sentDT, avg_Border_sentiment_by_day)
+```
+
+## Regression Model with Border Tweets
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Regression model with Border tweets
+model_Border <- lm(approval_diff_1 ~ Border_avg_sent, app_and_sentDT_Border)
+summary(model_Border)
+
+#Scatter plot of Border tweet regression model 
+ggplot(app_and_sentDT_Border, aes(x = approve_estimate, y = Border_avg_sent)) + 
+  geom_point(color = "steelblue3") + 
+  geom_smooth(method = "lm", se = FALSE, color = "firebrick1")+
+  labs(x = "Approval Rating", y = "Average Sentiment", title = "Scatter Plot of Approval Ratings and Average Border Tweet Sentiment")
+
+#ggsave("Scatter Plot of Approval Ratings and Average Border Tweet Sentiment.png")
+
+#Redidual Plot of Border Tweet regression 
+par(mfrow = c(2, 2))  # Split the plotting panel into a 2 x 2 grid
+plot(model_Border)
+```
+
+------------------------------------------------------------------------
+
+## Moving Average Plot of All Tweet Subset Average Daily Sentiment
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#Combining all plots with grid.arrange
+all_tweet_plot <- gridExtra::grid.arrange(
+
+#plot of Border tweets
+ggplot(avg_Border_sentiment_by_day, aes(x = date, y  = avg_Border_sent_ma_05)) + 
+  geom_line(color = "firebrick2") + 
+  labs(y = "Border Sentiment")+
+  theme_classic()+
+  theme(legend.position = "none", axis.title.x = element_blank()),
+#Plot of democratic tweets
+ggplot(avg_left_sentiment_by_day, aes(x = date, y  = avg_left_sent_ma_05)) + 
+  geom_line(color = "steelblue3")+ 
+  labs(y = "Dem. Sentiment")+
+  theme_classic()+
+  theme(legend.position = "none", axis.title.x = element_blank()),
+#Plot of news tweets
+ggplot(avg_news_sentiment_by_day, aes(x = date, y  = avg_news_sent_ma_05)) + 
+  geom_line()+ 
+  labs(y = "News Sentiment")+
+  theme_classic()+
+  theme(legend.position = "none", axis.title.x = element_blank()),
+
+top = "Average Tweet Sentiment by Topic Subsets"
+
+)
+
+ggsave("ma of all tweet subsets.png", all_tweet_plot)
+```
+
+## Calculating Sum of Sentiment By Subset
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+avg_Border_sentiment_by_day %>% summarise("Aveage Border Sentiment" = mean(Border_avg_sent))
+
+avg_left_sentiment_by_day %>% summarise("Aveage Left Sentiment" = mean(left_avg_sent))
+
+avg_news_sentiment_by_day %>% summarise("Aveage News Sentiment" = mean(news_avg_sent))
+```
+
+------------------------------------------------------------------------
+
+# Parts of Speech Tagging
+
+## Downloading Pretrained Model
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#download and load the pre-trained models
+#udmodel <- udpipe_download_model(language = "english")
+#udmodel <- udpipe_load_model(file = udmodel$file_model)
+
+#annotate the data frame with udpipe model
+#annotated_tweets <- udpipe_annotate(udmodel, x = clean_tweets$text)
+#annotated_tweets <- as.data.frame(annotated_tweets)
+```
+
+## Saving Annotated Tweets as RDS object
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+#saveRDS(annotated_tweets, file = "annotated_tweets.rds")
+annotated_tweets <- readRDS(file = "annotated_tweets.rds")
+
+```
+
+## Extracting Keyword Phrases using Simple Noun Phrases
+
+```{r echo=TRUE, results='hide', fig.show='hide'}
+annotated_tweets$phrase_tag <- as_phrasemachine(annotated_tweets$upos, type = "upos")
+stats2 <- keywords_phrases(x = annotated_tweets$phrase_tag, term = tolower(annotated_tweets$token), 
+                          pattern =  "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+
+stats2 <- subset(stats2, ngram > 1 & freq > 125)
+stats2$key <- factor(stats2$keyword, levels = rev(stats2$keyword))
+stats2 %>%
+  ggplot(aes(x = reorder(keyword, freq), y =  freq)) +
+  geom_col(fill = "steelblue3") +
+  coord_flip() +
+  geom_text(aes(label = freq, vjust = 0, hjust = -0.3 )) +
+  xlab("Keywords")+
+  ylab("Frequency")+
+  ggtitle("Keywords Identified by POS Tags - Simple Noun Phrases") +
+  theme_classic()+
+  theme(legend.position = "none")
+
+#ggsave("Keywords Identified by POS Tags - Simple Noun Phrases.png")
+
+```
+
+\#References
+
+```{r}
+citation("tidytext")
+citation("tidyverse")
+citation("qdap")
+citation("stringr")
+citation("wordcloud")
+citation("SentimentAnalysis")
+citation("lubridate")
+citation("pracma")
+citation("udpipe")
+citation("Rcpp")
+citation("rtweet")
+citation("ggpubr")
+citation("tidyquant")
+citation("readxl")
+citation("data.table")
+```
